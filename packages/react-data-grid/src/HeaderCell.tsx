@@ -1,0 +1,191 @@
+import React from 'react';
+import classNames from 'classnames';
+import { isElement } from 'react-is';
+import { isFrozen } from './utils/columnUtils';
+import { HeaderRowType } from './common/enums';
+import { CalculatedColumn, HeaderRowProps } from './common/types';
+
+/** 默认渲染的表头单元格组件，不支持过滤，注意表格的内容单元格是单独的Cell组件 */
+function SimpleCellRenderer<R>({ column, rowType }: HeaderRowProps<R>) {
+  // eslint-disable-next-line prefer-rest-params
+  // console.log(arguments[0]);
+  const headerText = rowType === HeaderRowType.HEADER ? column.name : '';
+  return <div>{headerText}</div>;
+}
+
+interface Props<R> {
+  renderer?: React.ReactElement | React.ComponentType<HeaderRowProps<R>>;
+  column: CalculatedColumn<R>;
+  rowType: HeaderRowType;
+  height: number;
+  onResize(column: CalculatedColumn<R>, width: number): void;
+  onResizeEnd(column: CalculatedColumn<R>, width: number): void;
+  onHeaderDrop?(): void;
+  draggableHeaderCell?: React.ComponentType<{ column: CalculatedColumn<R>; onHeaderDrop(): void }>;
+  className?: string;
+}
+/**
+ * 表头单元格组件
+ */
+export default class HeaderCell<R> extends React.Component<Props<R>> {
+  /** ref-cell */
+  cell = React.createRef<HTMLDivElement>();
+
+  onMouseDown = (event: React.MouseEvent) => {
+    if (event.button !== 0) {
+      return;
+    }
+    const { right } = event.currentTarget.getBoundingClientRect();
+    const offset = right - event.clientX;
+    if (offset > 11) {
+      // +1px to account for the border size
+      return;
+    }
+
+    const onMouseMove = (event: MouseEvent) => {
+      this.onResize(event.clientX + offset);
+    };
+
+    const onMouseUp = (event: MouseEvent) => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+      this.onResizeEnd(event.clientX + offset);
+    };
+
+    event.preventDefault();
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  onTouchStart = (event: React.TouchEvent) => {
+    const touch = event.changedTouches[0];
+    const { identifier } = touch;
+    const { right } = event.currentTarget.getBoundingClientRect();
+    const offset = right - touch.clientX;
+
+    if (offset > 11) {
+      // +1px to account for the border size
+      return;
+    }
+
+    function getTouch(event: TouchEvent) {
+      for (const touch of event.changedTouches as any) {
+        if (touch.identifier === identifier) return touch;
+      }
+      return null;
+    }
+
+    const onTouchMove = (event: TouchEvent) => {
+      const touch = getTouch(event);
+      if (touch) {
+        this.onResize(touch.clientX + offset);
+      }
+    };
+
+    const onTouchEnd = (event: TouchEvent) => {
+      const touch = getTouch(event);
+      if (!touch) return;
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend', onTouchEnd);
+      this.onResizeEnd(touch.clientX + offset);
+    };
+
+    window.addEventListener('touchmove', onTouchMove);
+    window.addEventListener('touchend', onTouchEnd);
+  };
+
+  onResize(x: number) {
+    const { onResize } = this.props;
+    if (onResize) {
+      const width = this.getWidthFromMouseEvent(x);
+      if (width > 0) {
+        onResize(this.props.column, width);
+      }
+    }
+  }
+
+  onResizeEnd(x: number) {
+    const width = this.getWidthFromMouseEvent(x);
+    this.props.onResizeEnd(this.props.column, width);
+  }
+
+  getWidthFromMouseEvent(x: number): number {
+    return x - this.cell.current!.getBoundingClientRect().left;
+  }
+
+  /** 获取一个普通表头单元格组件，支持使用自定义组件 */
+  getCell() {
+    const { height, column, rowType } = this.props;
+
+    // 表头默认使用的单元格组件为SimpleCellRenderer
+    const renderer = this.props.renderer || SimpleCellRenderer;
+    if (isElement(renderer)) {
+      // if it is a string, it's an HTML element, and column is not a valid property, so only pass height
+      if (typeof renderer.type === 'string') {
+        return React.cloneElement(renderer, { height });
+      }
+      return React.cloneElement(renderer, { column, height });
+    }
+    return React.createElement(renderer, { column, rowType });
+  }
+
+  setScrollLeft(scrollLeft: number) {
+    const node = this.cell.current;
+    if (node) {
+      node.style.transform = `translateX(${scrollLeft}px)`;
+    }
+  }
+
+  removeScroll() {
+    const node = this.cell.current;
+    if (node) {
+      node.style.transform = 'none';
+    }
+  }
+
+  render() {
+    // console.log('====props4 HeaderCell ');
+    // console.log(this.props);
+
+    const { column, rowType, height } = this.props;
+
+    const className = classNames(
+      'react-grid-HeaderCell',
+      {
+        'rdg-header-cell-resizable': column.resizable,
+        'react-grid-HeaderCell--frozen': isFrozen(column),
+      },
+      this.props.className,
+      column.cellClass,
+    );
+
+    const style: React.CSSProperties = {
+      width: column.width,
+      left: column.left,
+      height,
+    };
+
+    const cell = (
+      <div
+        className={className}
+        style={style}
+        ref={this.cell}
+        onMouseDown={column.resizable ? this.onMouseDown : undefined}
+        onTouchStart={column.resizable ? this.onTouchStart : undefined}
+      >
+        {this.getCell()}
+      </div>
+    );
+
+    const DraggableHeaderCell = this.props.draggableHeaderCell;
+    if (rowType === HeaderRowType.HEADER && column.draggable && DraggableHeaderCell) {
+      return (
+        <DraggableHeaderCell column={column} onHeaderDrop={this.props.onHeaderDrop!}>
+          {cell}
+        </DraggableHeaderCell>
+      );
+    }
+
+    return cell;
+  }
+}

@@ -1,0 +1,796 @@
+import React, { cloneElement } from 'react';
+import { isElement } from 'react-is';
+import SelectionMask from './SelectionMask';
+import SelectionRangeMask from './SelectionRangeMask';
+import CopyMask from './CopyMask';
+import DragMask, { DraggedPosition } from './DragMask';
+import DragHandle from './DragHandle';
+import EditorContainer from '../common/editors/EditorContainer';
+import EditorPortal from '../common/editors/EditorPortal';
+import { isKeyPrintable, isCtrlKeyHeldDown } from '../common/utils/keyboardUtils';
+import {
+  getSelectedDimensions,
+  getSelectedCellValue,
+  getSelectedRangeDimensions,
+  getNextSelectedCellPosition,
+  canExitGrid,
+  isSelectedCellEditable,
+  selectedRangeIsSingleCell,
+  NextSelectedCellPosition,
+} from '../utils/selectedCellUtils';
+import { isFrozen } from '../utils/columnUtils';
+import keyCodes from '../common/KeyCodes';
+import { UpdateActions, CellNavigationMode, EventTypes } from '../common/enums';
+import {
+  CalculatedColumn,
+  Position,
+  SelectedRange,
+  Dimension,
+  InteractionMasksMetaData,
+  CommitEvent,
+} from '../common/types';
+import { CanvasProps } from '../Canvas';
+
+interface NavAction {
+  getNext(current: Position): Position;
+  isCellAtBoundary(cell: Position): boolean;
+  onHitBoundary(next: Position): void;
+}
+
+type SharedCanvasProps<R> = Pick<
+  CanvasProps<R>,
+  | 'rowGetter'
+  | 'rowsCount'
+  | 'rowHeight'
+  | 'columns'
+  | 'rowVisibleStartIdx'
+  | 'rowVisibleEndIdx'
+  | 'colVisibleStartIdx'
+  | 'colVisibleEndIdx'
+  | 'enableCellSelect'
+  | 'enableCellAutoFocus'
+  | 'cellNavigationMode'
+  | 'eventBus'
+  | 'contextMenu'
+  | 'editorPortalTarget'
+>;
+
+export interface InteractionMasksProps<R> extends SharedCanvasProps<R>, InteractionMasksMetaData<R> {
+  onHitTopBoundary(): void;
+  onHitBottomBoundary(): void;
+  onHitLeftBoundary(position: Position): void;
+  onHitRightBoundary(position: Position): void;
+  scrollLeft: number;
+  scrollTop: number;
+  getRowHeight(rowIdx: number): number;
+  getRowTop(rowIdx: number): number;
+  getRowColumns(rowIdx: number): CalculatedColumn<R>[];
+}
+
+/** InteractionMasks组件的State类型 */
+export interface InteractionMasksState {
+  /** 当前选择单元格的行列号 */
+  selectedPosition: Position;
+  /** 当前选择单元格的范围 */
+  selectedRange: SelectedRange;
+  /** 当前复制的单元格的位置 */
+  copiedPosition: (Position & { value: unknown }) | null;
+  /** 当前拖拽的单元格的位置 */
+  draggedPosition: DraggedPosition | null;
+  /** 单元格编辑器的位置 */
+  editorPosition: { top: number; left: number } | null;
+  /** 单元格编辑器是否处于打开状态 */
+  isEditorEnabled: boolean;
+  /** 按下的第一个键，可以是 a control or special character */
+  firstEditorKeyPress: string | null;
+}
+
+const SCROLL_CELL_BUFFER = 2;
+
+/**
+ * 当前选择的活跃单元格的指示组件。
+ * A major change to RDG was to migrate all the grid interaction functionality, out of the Row and Cell components and into its own separate layer.
+ * The responsibilities of the InteractionMask are render a SelectionMask/EditorContainer/DragMask/CopyMask/CellRangeSelectionMask
+ */
+export default class InteractionMasks<R> extends React.Component<InteractionMasksProps<R>, InteractionMasksState> {
+  static displayName = 'InteractionMasks';
+
+  /** state会存放各种操作涉及的单元格位置 */
+  state: Readonly<InteractionMasksState> = {
+    selectedPosition: {
+      idx: -1,
+      rowIdx: -1,
+    },
+    selectedRange: {
+      topLeft: {
+        idx: -1,
+        rowIdx: -1,
+      },
+      bottomRight: {
+        idx: -1,
+        rowIdx: -1,
+      },
+      startCell: null,
+      cursorCell: null,
+      isDragging: false,
+    },
+    copiedPosition: null,
+    draggedPosition: null,
+    editorPosition: null,
+    isEditorEnabled: false,
+    firstEditorKeyPress: null,
+  };
+
+  /** ref-selectionMask */
+  selectionMask = React.createRef<HTMLDivElement>();
+  /** ref-copyMask */
+  copyMask = React.createRef<HTMLDivElement>();
+
+  unsubscribeEventHandlers: Array<() => void> = [];
+
+  /** 首次挂载后会注册单元格操作事件到事件中心 */
+  componentDidMount() {
+    const { eventBus, enableCellAutoFocus } = this.props;
+
+    this.unsubscribeEventHandlers = [
+      eventBus.subscribe(EventTypes.SELECT_CELL, this.selectCell),
+      eventBus.subscribe(EventTypes.SELECT_START, this.onSelectCellRangeStarted),
+      eventBus.subscribe(EventTypes.SELECT_UPDATE, this.onSelectCellRangeUpdated),
+      eventBus.subscribe(EventTypes.SELECT_END, this.onSelectCellRangeEnded),
+      eventBus.subscribe(EventTypes.DRAG_ENTER, this.handleDragEnter),
+    ];
+
+    if (enableCellAutoFocus && this.isFocusedOnBody()) {
+      this.selectFirstCell();
+    }
+  }
+
+  componentWillUnmount() {
+    this.unsubscribeEventHandlers.forEach(h => h());
+  }
+
+  /** 当前活跃单元格更新后会获取到焦点，会调用元素的focus() */
+  componentDidUpdate(prevProps: InteractionMasksProps<R>, prevState: InteractionMasksState) {
+    // console.log('====componentDidUpdate InteractionMasks');
+
+    const { selectedPosition, isEditorEnabled } = this.state;
+    const { selectedPosition: prevSelectedPosition, isEditorEnabled: prevIsEditorEnabled } = prevState;
+
+    // 当前选择的活跃单元格是否变化
+    const isSelectedPositionChanged =
+      selectedPosition !== prevSelectedPosition &&
+      (selectedPosition.rowIdx !== prevSelectedPosition.rowIdx || selectedPosition.idx !== prevSelectedPosition.idx);
+    // 单元格编辑器是否关闭
+    const isEditorClosed = isEditorEnabled !== prevIsEditorEnabled && !isEditorEnabled;
+
+    // 若当前选择的单元格已变化
+    if (isSelectedPositionChanged) {
+      // Call event handlers if selected cell has changed
+      const { onCellSelected, onCellDeSelected } = this.props;
+      // 先取消上次选择的单元格
+      if (onCellDeSelected && this.isCellWithinBounds(prevSelectedPosition)) {
+        onCellDeSelected({ ...prevSelectedPosition });
+      }
+      // 再选择当前单元格
+      if (onCellSelected && this.isCellWithinBounds(selectedPosition)) {
+        onCellSelected({ ...selectedPosition });
+      }
+    }
+
+    // 若所选单元格已变化且当前单元格在选择范围之内，或单元格编辑器已关闭，则使当前选择的单元格获得焦点
+    if ((isSelectedPositionChanged && this.isCellWithinBounds(selectedPosition)) || isEditorClosed) {
+      this.focus();
+    }
+  }
+
+  /** 计算单元格编辑器的位置 */
+  getEditorPosition() {
+    if (!this.selectionMask.current) return null;
+
+    const { editorPortalTarget } = this.props;
+    const { left: selectionMaskLeft, top: selectionMaskTop } = this.selectionMask.current.getBoundingClientRect();
+
+    // 若编辑器组件是直接挂载到body
+    if (editorPortalTarget === document.body) {
+      const { scrollLeft, scrollTop } = document.scrollingElement || document.documentElement;
+      return {
+        left: selectionMaskLeft + scrollLeft,
+        top: selectionMaskTop + scrollTop,
+      };
+    }
+
+    // 若编辑器组件未挂载到body，则根据最近定位元素来计算
+    const { left: portalTargetLeft, top: portalTargetTop } = editorPortalTarget.getBoundingClientRect();
+    const { scrollLeft, scrollTop } = editorPortalTarget;
+    return {
+      left: selectionMaskLeft - portalTargetLeft + scrollLeft,
+      top: selectionMaskTop - portalTargetTop + scrollTop,
+    };
+  }
+
+  setMaskScollLeft(mask: HTMLDivElement | null, position: Position | null, scrollLeft: number): void {
+    if (!mask || !position) return;
+
+    const { idx, rowIdx } = position;
+    if (!(idx >= 0 && rowIdx >= 0)) return;
+
+    const column = this.props.columns[idx];
+    if (!isFrozen(column)) return;
+
+    const top = this.props.getRowTop(rowIdx);
+    const left = scrollLeft + column.left;
+    const transform = `translate(${left}px, ${top}px)`;
+    if (mask.style.transform !== transform) {
+      mask.style.transform = transform;
+    }
+  }
+
+  /**
+   * Sets the position of SelectionMask and CopyMask components when the canvas is scrolled
+   * This is only required on the frozen columns
+   */
+  setScrollLeft(scrollLeft: number): void {
+    this.setMaskScollLeft(this.selectionMask.current, this.state.selectedPosition, scrollLeft);
+    this.setMaskScollLeft(this.copyMask.current, this.state.copiedPosition, scrollLeft);
+  }
+
+  onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>): void => {
+    if (isCtrlKeyHeldDown(e)) {
+      this.onPressKeyWithCtrl(e);
+    } else if (e.keyCode === keyCodes.Escape) {
+      this.onPressEscape();
+    } else if (e.keyCode === keyCodes.Tab) {
+      this.onPressTab(e);
+    } else if (this.isKeyboardNavigationEvent(e)) {
+      this.changeCellFromEvent(e);
+    } else if (
+      isKeyPrintable(e.keyCode) ||
+      ([keyCodes.Backspace, keyCodes.Delete, keyCodes.Enter] as number[]).includes(e.keyCode)
+    ) {
+      this.openEditor(e);
+    }
+  };
+
+  isSelectedCellEditable(): boolean {
+    const { enableCellSelect, columns, rowGetter, onCheckCellIsEditable } = this.props;
+    const { selectedPosition } = this.state;
+    return isSelectedCellEditable<R>({ enableCellSelect, columns, rowGetter, selectedPosition, onCheckCellIsEditable });
+  }
+
+  /** 打开单元格编辑器 */
+  openEditor = (event?: React.KeyboardEvent<HTMLDivElement>): void => {
+    // 若当前单元格可编辑，且编辑器未打开
+    if (this.isSelectedCellEditable() && !this.state.isEditorEnabled) {
+      this.setState({
+        isEditorEnabled: true,
+        firstEditorKeyPress: event ? event.key : null,
+        editorPosition: this.getEditorPosition(),
+      });
+    }
+  };
+
+  /** 通过改变state中参数，关闭编辑器 */
+  closeEditor(): void {
+    this.setState({
+      isEditorEnabled: false,
+      firstEditorKeyPress: null,
+      editorPosition: null,
+    });
+  }
+
+  onPressKeyWithCtrl({ keyCode }: React.KeyboardEvent<HTMLDivElement>): void {
+    if (this.copyPasteEnabled()) {
+      if (keyCode === keyCodes.c) {
+        const { columns, rowGetter } = this.props;
+        const { selectedPosition } = this.state;
+        const value = getSelectedCellValue({ selectedPosition, columns, rowGetter });
+        this.handleCopy(value);
+      } else if (keyCode === keyCodes.v) {
+        this.handlePaste();
+      }
+    }
+  }
+
+  onFocus = (): void => {
+    const { idx, rowIdx } = this.state.selectedPosition;
+    if (idx === -1 && rowIdx === -1) {
+      this.selectFirstCell();
+    }
+  };
+
+  onPressTab(e: React.KeyboardEvent<HTMLDivElement>): void {
+    const { cellNavigationMode, columns, rowsCount } = this.props;
+    const { selectedPosition, isEditorEnabled } = this.state;
+    // When there are no rows in the grid, we need to allow the browser to handle tab presses
+    if (rowsCount === 0) {
+      return;
+    }
+
+    // If we are in a position to leave the grid, stop editing but stay in that cell
+    if (canExitGrid(e, { cellNavigationMode, columns, rowsCount, selectedPosition })) {
+      if (isEditorEnabled) {
+        this.closeEditor();
+        return;
+      }
+
+      // Reset the selected position before exiting
+      this.setState({ selectedPosition: { idx: -1, rowIdx: -1 } });
+      return;
+    }
+
+    this.changeCellFromEvent(e);
+  }
+
+  onPressEscape(): void {
+    if (this.copyPasteEnabled()) {
+      this.handleCancelCopy();
+      this.closeEditor();
+    }
+  }
+
+  copyPasteEnabled(): boolean {
+    return this.props.onCellCopyPaste !== null && this.isSelectedCellEditable();
+  }
+
+  handleCopy(value: unknown): void {
+    const { rowIdx, idx } = this.state.selectedPosition;
+    this.setState({
+      copiedPosition: { rowIdx, idx, value },
+    });
+  }
+
+  handleCancelCopy(): void {
+    this.setState({ copiedPosition: null });
+  }
+
+  handlePaste(): void {
+    const { columns, onCellCopyPaste, onGridRowsUpdated } = this.props;
+    const { selectedPosition, copiedPosition } = this.state;
+    const { rowIdx: toRow } = selectedPosition;
+
+    if (copiedPosition === null) {
+      return;
+    }
+
+    const cellKey = columns[selectedPosition.idx].key;
+    const { rowIdx: fromRow, value } = copiedPosition;
+
+    if (onCellCopyPaste) {
+      onCellCopyPaste({
+        cellKey,
+        rowIdx: toRow,
+        fromRow,
+        toRow,
+        value,
+      });
+    }
+
+    onGridRowsUpdated(cellKey, toRow, toRow, { [cellKey]: value }, UpdateActions.COPY_PASTE, fromRow);
+  }
+
+  isKeyboardNavigationEvent(e: React.KeyboardEvent<HTMLDivElement>): boolean {
+    return this.getKeyNavActionFromEvent(e) !== null;
+  }
+
+  getKeyNavActionFromEvent(e: React.KeyboardEvent<HTMLDivElement>): NavAction | null {
+    const {
+      rowVisibleEndIdx,
+      rowVisibleStartIdx,
+      colVisibleEndIdx,
+      colVisibleStartIdx,
+      onHitBottomBoundary,
+      onHitRightBoundary,
+      onHitLeftBoundary,
+      onHitTopBoundary,
+    } = this.props;
+    const isCellAtBottomBoundary = (cell: Position): boolean => cell.rowIdx >= rowVisibleEndIdx - SCROLL_CELL_BUFFER;
+    const isCellAtTopBoundary = (cell: Position): boolean => cell.rowIdx !== 0 && cell.rowIdx <= rowVisibleStartIdx - 1;
+    const isCellAtRightBoundary = (cell: Position): boolean => cell.idx !== 0 && cell.idx >= colVisibleEndIdx - 1;
+    const isCellAtLeftBoundary = (cell: Position): boolean => cell.idx !== 0 && cell.idx <= colVisibleStartIdx + 1;
+
+    const ArrowDown: NavAction = {
+      getNext: current => ({ ...current, rowIdx: current.rowIdx + 1 }),
+      isCellAtBoundary: isCellAtBottomBoundary,
+      onHitBoundary: onHitBottomBoundary,
+    };
+    const ArrowUp: NavAction = {
+      getNext: current => ({ ...current, rowIdx: current.rowIdx - 1 }),
+      isCellAtBoundary: isCellAtTopBoundary,
+      onHitBoundary: onHitTopBoundary,
+    };
+    const ArrowRight: NavAction = {
+      getNext: current => ({ ...current, idx: current.idx + 1 }),
+      isCellAtBoundary: isCellAtRightBoundary,
+      onHitBoundary(next) {
+        onHitRightBoundary(next);
+        // Selected cell can hit the bottom boundary when the cellNavigationMode is 'changeRow'
+        if (isCellAtBottomBoundary(next)) {
+          onHitBottomBoundary();
+        }
+      },
+    };
+    const ArrowLeft: NavAction = {
+      getNext: current => ({ ...current, idx: current.idx - 1 }),
+      isCellAtBoundary: isCellAtLeftBoundary,
+      onHitBoundary(next) {
+        onHitLeftBoundary(next);
+        // Selected cell can hit the top boundary when the cellNavigationMode is 'changeRow'
+        if (isCellAtTopBoundary(next)) {
+          onHitTopBoundary();
+        }
+      },
+    };
+
+    if (e.keyCode === keyCodes.Tab) {
+      return e.shiftKey === true ? ArrowLeft : ArrowRight;
+    }
+
+    switch (e.key) {
+      case 'ArrowDown':
+        return ArrowDown;
+      case 'ArrowUp':
+        return ArrowUp;
+      case 'ArrowRight':
+        return ArrowRight;
+      case 'ArrowLeft':
+        return ArrowLeft;
+      default:
+        return null;
+    }
+  }
+
+  changeCellFromEvent(e: React.KeyboardEvent<HTMLDivElement>): void {
+    e.preventDefault();
+    const isTab = e.keyCode === keyCodes.Tab;
+    const isShift = e.shiftKey;
+
+    if (isTab) {
+      const cellNavigationMode =
+        this.props.cellNavigationMode === CellNavigationMode.NONE
+          ? CellNavigationMode.CHANGE_ROW
+          : this.props.cellNavigationMode;
+      this.changeCellFromKeyAction(e, cellNavigationMode);
+    } else if (isShift) {
+      this.changeSelectedRangeFromArrowKeyAction(e);
+    } else {
+      this.changeCellFromKeyAction(e, this.props.cellNavigationMode);
+    }
+  }
+
+  changeCellFromKeyAction(e: React.KeyboardEvent<HTMLDivElement>, cellNavigationMode: CellNavigationMode): void {
+    const keyNavAction = this.getKeyNavActionFromEvent(e);
+    if (keyNavAction) {
+      const currentPosition = this.state.selectedPosition;
+      const next = this.getNextSelectedCellPositionForKeyNavAction(keyNavAction, currentPosition, cellNavigationMode);
+      this.checkIsAtGridBoundary(keyNavAction, next);
+      this.selectCell(next);
+    }
+  }
+
+  changeSelectedRangeFromArrowKeyAction(e: React.KeyboardEvent<HTMLDivElement>): void {
+    const keyNavAction = this.getKeyNavActionFromEvent(e);
+    if (keyNavAction) {
+      const { cellNavigationMode } = this.props;
+      const currentPosition = this.state.selectedRange.cursorCell || this.state.selectedPosition;
+      const next = this.getNextSelectedCellPositionForKeyNavAction(keyNavAction, currentPosition, cellNavigationMode);
+      this.checkIsAtGridBoundary(keyNavAction, next);
+      this.onSelectCellRangeUpdated({ ...next }, true, () => {
+        this.onSelectCellRangeEnded();
+      });
+    }
+  }
+
+  getNextSelectedCellPositionForKeyNavAction(
+    keyNavAction: NavAction,
+    currentPosition: Position,
+    cellNavigationMode: CellNavigationMode,
+  ): NextSelectedCellPosition {
+    const { getNext } = keyNavAction;
+    const nextPosition = getNext(currentPosition);
+    const { columns, rowsCount } = this.props;
+    return getNextSelectedCellPosition({
+      columns,
+      rowsCount,
+      cellNavigationMode,
+      nextPosition,
+    });
+  }
+
+  checkIsAtGridBoundary(keyNavAction: NavAction, next: NextSelectedCellPosition): void {
+    const { isCellAtBoundary, onHitBoundary } = keyNavAction;
+    const { changeRowOrColumn, ...nextPos } = next;
+    if (isCellAtBoundary(nextPos) || changeRowOrColumn) {
+      onHitBoundary(nextPos);
+    }
+  }
+
+  isCellWithinBounds({ idx, rowIdx }: Position): boolean {
+    const { columns, rowsCount } = this.props;
+    return rowIdx >= 0 && rowIdx < rowsCount && idx >= 0 && idx < columns.length;
+  }
+
+  isGridSelected(): boolean {
+    return this.isCellWithinBounds(this.state.selectedPosition);
+  }
+
+  isFocused(): boolean {
+    return document.activeElement === this.selectionMask.current;
+  }
+
+  isFocusedOnBody(): boolean {
+    return document.activeElement === document.body;
+  }
+
+  focus(): void {
+    if (this.selectionMask.current && !this.isFocused()) {
+      this.selectionMask.current.focus();
+    }
+  }
+
+  selectFirstCell(): void {
+    this.selectCell({ rowIdx: 0, idx: 0 });
+  }
+
+  /** 单击或双击选择单元格时会触发的方法，FIXME，优化双击时会调用3次本方法 */
+  selectCell = (cell: Position, openEditor?: boolean): void => {
+    // console.log('====IMASK selectCell');
+    // 获取打开单元格编辑器的方法
+    const callback = openEditor ? this.openEditor : undefined;
+    // Close the editor to commit any pending changes，先关闭正在编辑的单元格
+    if (this.state.isEditorEnabled) {
+      this.closeEditor();
+    }
+    // 先提交单元格最新数据更新state，再打开单元格
+    this.setState(() => {
+      // console.log('!this.isCellWithinBounds(cell), ', !this.isCellWithinBounds(cell)); // 默认false
+      if (!this.isCellWithinBounds(cell)) return null;
+
+      return {
+        selectedPosition: cell,
+        selectedRange: {
+          topLeft: cell,
+          bottomRight: cell,
+          startCell: cell,
+          cursorCell: cell,
+          isDragging: false,
+        },
+      };
+    }, callback);
+  };
+
+  createSingleCellSelectedRange(cellPosition: Position, isDragging: boolean): SelectedRange {
+    return {
+      topLeft: cellPosition,
+      bottomRight: cellPosition,
+      startCell: cellPosition,
+      cursorCell: cellPosition,
+      isDragging,
+    };
+  }
+
+  onSelectCellRangeStarted = (selectedPosition: Position): void => {
+    this.setState(
+      {
+        selectedRange: this.createSingleCellSelectedRange(selectedPosition, true),
+        selectedPosition,
+      },
+      () => {
+        if (this.props.onCellRangeSelectionStarted) {
+          this.props.onCellRangeSelectionStarted(this.state.selectedRange);
+        }
+      },
+    );
+  };
+
+  onSelectCellRangeUpdated = (cellPosition: Position, isFromKeyboard?: boolean, callback?: () => void): void => {
+    if ((!this.state.selectedRange.isDragging && !isFromKeyboard) || !this.isCellWithinBounds(cellPosition)) {
+      return;
+    }
+
+    const startCell = this.state.selectedRange.startCell || this.state.selectedPosition;
+    const colIdxs = [startCell.idx, cellPosition.idx].sort((a, b) => a - b);
+    const rowIdxs = [startCell.rowIdx, cellPosition.rowIdx].sort((a, b) => a - b);
+    const topLeft: Position = { idx: colIdxs[0], rowIdx: rowIdxs[0] };
+    const bottomRight: Position = { idx: colIdxs[1], rowIdx: rowIdxs[1] };
+
+    const selectedRange: SelectedRange = {
+      ...this.state.selectedRange,
+      // default the startCell to the selected cell, in case we've just started via keyboard
+      startCell: this.state.selectedRange.startCell || this.state.selectedPosition,
+      // assign the new state - the bounds of the range, and the new cursor cell
+      topLeft,
+      bottomRight,
+      cursorCell: cellPosition,
+    };
+
+    this.setState(
+      {
+        selectedRange,
+      },
+      () => {
+        if (this.props.onCellRangeSelectionUpdated) {
+          this.props.onCellRangeSelectionUpdated(this.state.selectedRange);
+        }
+        if (callback) {
+          callback();
+        }
+      },
+    );
+  };
+
+  onSelectCellRangeEnded = (): void => {
+    const selectedRange = { ...this.state.selectedRange, isDragging: false };
+    this.setState({ selectedRange }, () => {
+      if (this.props.onCellRangeSelectionCompleted) {
+        this.props.onCellRangeSelectionCompleted(this.state.selectedRange);
+      }
+
+      // Focus the InteractionMasks, so it can receive keyboard events
+      this.focus();
+    });
+  };
+
+  isDragEnabled(): boolean {
+    return this.isSelectedCellEditable();
+  }
+
+  handleDragStart = (e: React.DragEvent<HTMLDivElement>): void => {
+    const { selectedPosition } = this.state;
+    // To prevent dragging down/up when reordering rows. (TODO: is this required)
+    if (selectedPosition.idx > -1) {
+      e.dataTransfer.effectAllowed = 'copy';
+      // Setting data is required to make an element draggable in FF
+      const transferData = JSON.stringify(selectedPosition);
+      try {
+        e.dataTransfer.setData('text/plain', transferData);
+      } catch (ex) {
+        // IE only supports 'text' and 'URL' for the 'type' argument
+        e.dataTransfer.setData('text', transferData);
+      }
+      this.setState({
+        draggedPosition: {
+          ...selectedPosition,
+          overRowIdx: selectedPosition.rowIdx,
+        },
+      });
+    }
+  };
+
+  handleDragEnter = (overRowIdx: number): void => {
+    this.setState(({ draggedPosition }) => {
+      if (draggedPosition) {
+        return { draggedPosition: { ...draggedPosition, overRowIdx } };
+      }
+      return null;
+    });
+  };
+
+  handleDragEnd = () => {
+    const { draggedPosition } = this.state;
+    if (draggedPosition === null) return;
+
+    const { rowIdx, overRowIdx } = draggedPosition;
+    const { columns, onGridRowsUpdated, rowGetter } = this.props;
+    const column = columns[draggedPosition.idx];
+    const value = getSelectedCellValue({ selectedPosition: draggedPosition, columns, rowGetter });
+    const cellKey = column.key;
+    // const fromRow = rowIdx < overRowIdx ? rowIdx : overRowIdx;
+    // const toRow = rowIdx > overRowIdx ? rowIdx : overRowIdx;
+
+    onGridRowsUpdated(cellKey, rowIdx, overRowIdx, { [cellKey]: value }, UpdateActions.CELL_DRAG);
+
+    this.setState({
+      draggedPosition: null,
+    });
+  };
+
+  onDragHandleDoubleClick = (): void => {
+    const { onDragHandleDoubleClick, rowGetter } = this.props;
+    const { selectedPosition } = this.state;
+    const { idx, rowIdx } = selectedPosition;
+    const rowData = rowGetter(selectedPosition.rowIdx);
+    onDragHandleDoubleClick({ idx, rowIdx, rowData });
+  };
+
+  /** 提交单元格编辑器的最新值，并关闭编辑器 */
+  onCommit = (args: CommitEvent<R>): void => {
+    this.props.onCommit(args);
+    this.closeEditor();
+  };
+
+  onCommitCancel = (): void => {
+    this.closeEditor();
+  };
+
+  getSelectedDimensions = (selectedPosition: Position, useGridColumns?: boolean): Dimension => {
+    const { scrollLeft, getRowHeight, getRowTop, getRowColumns, columns: gridColumns } = this.props;
+    const columns = useGridColumns ? gridColumns : getRowColumns(selectedPosition.rowIdx);
+    const top = getRowTop(selectedPosition.rowIdx);
+    const rowHeight = getRowHeight(selectedPosition.rowIdx);
+    const dimension = getSelectedDimensions({ selectedPosition, columns, scrollLeft, rowHeight });
+    dimension.top = top;
+    return dimension;
+  };
+
+  renderSingleCellSelectView() {
+    return (
+      !this.state.isEditorEnabled &&
+      this.isGridSelected() && (
+        <SelectionMask {...this.getSelectedDimensions(this.state.selectedPosition, true)} ref={this.selectionMask}>
+          {this.isDragEnabled() && (
+            <DragHandle
+              onDragStart={this.handleDragStart}
+              onDragEnd={this.handleDragEnd}
+              onDoubleClick={this.onDragHandleDoubleClick}
+            />
+          )}
+        </SelectionMask>
+      )
+    );
+  }
+
+  renderCellRangeSelectView() {
+    const { columns, rowHeight } = this.props;
+    return (
+      <>
+        <SelectionRangeMask
+          {...getSelectedRangeDimensions({ selectedRange: this.state.selectedRange, columns, rowHeight })}
+        />
+        <SelectionMask {...this.getSelectedDimensions(this.state.selectedPosition, true)} ref={this.selectionMask} />
+      </>
+    );
+  }
+
+  /**
+   * 当前活跃单元格组件使用了条件渲染，从上到下支持CopyMask，DragMask，SelectionRangeMask，EditorPortal，contextMenu
+   */
+  render() {
+    // console.log('===props4 InteractionMasks');
+    // console.log(this.props)
+    // console.log(this.state);
+
+    const { rowGetter, contextMenu, getRowColumns, scrollLeft, scrollTop } = this.props;
+    const { isEditorEnabled, firstEditorKeyPress, selectedPosition, draggedPosition, copiedPosition } = this.state;
+    // 获取活跃单元格所在行的数据
+    const rowData = rowGetter(selectedPosition.rowIdx);
+    // 获取列信息
+    const columns = getRowColumns(selectedPosition.rowIdx);
+    // console.log('rowData, ', rowData);
+    // console.log('columns, ', columns);
+    // 条件渲染
+    return (
+      <div onKeyDown={this.onKeyDown} onFocus={this.onFocus}>
+        {/* 复制相关 */}
+        {copiedPosition && <CopyMask {...this.getSelectedDimensions(copiedPosition)} ref={this.copyMask} />}
+        {/* 拖拽相关 */}
+        {draggedPosition && (
+          <DragMask draggedPosition={draggedPosition} getSelectedDimensions={this.getSelectedDimensions} />
+        )}
+        {/* 选择一个单元格或一块区域 */}
+        {selectedRangeIsSingleCell(this.state.selectedRange)
+          ? this.renderSingleCellSelectView()
+          : this.renderCellRangeSelectView()}
+        {/* 单元格编辑器 */}
+        {isEditorEnabled && (
+          <EditorPortal target={this.props.editorPortalTarget}>
+            <EditorContainer<R>
+              column={columns[selectedPosition.idx]}
+              rowIdx={selectedPosition.rowIdx}
+              rowData={rowData}
+              value={getSelectedCellValue({ selectedPosition, columns, rowGetter })!}
+              onCommit={this.onCommit}
+              onCommitCancel={this.onCommitCancel}
+              scrollLeft={scrollLeft}
+              scrollTop={scrollTop}
+              firstEditorKeyPress={firstEditorKeyPress}
+              {...this.getSelectedDimensions(selectedPosition)}
+              {...this.state.editorPosition}
+            />
+          </EditorPortal>
+        )}
+        {/* 右键菜单 */}
+        {isElement(contextMenu) && cloneElement(contextMenu, { ...selectedPosition })}
+      </div>
+    );
+  }
+}

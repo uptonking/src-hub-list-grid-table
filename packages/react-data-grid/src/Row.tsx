@@ -1,0 +1,155 @@
+import React from 'react';
+import classNames from 'classnames';
+import rowComparer from './common/utils/RowComparer';
+import Cell from './Cell';
+import { isFrozen } from './utils/columnUtils';
+import * as rowUtils from './utils/rowUtils';
+import { RowRenderer, RowRendererProps, CellRenderer, CellRendererProps, CalculatedColumn } from './common/types';
+
+/**
+ * Row组件，会渲染一行所有单元格组件的数组
+ */
+export default class Row<R> extends React.Component<RowRendererProps<R>> implements RowRenderer<R> {
+  static displayName = 'Row';
+
+  static defaultProps = {
+    /** 默认的单元格组件 */
+    cellRenderer: Cell,
+    isSelected: false,
+    /** 默认行高 */
+    height: 35,
+  };
+
+  /** ref-row */
+  row = React.createRef<HTMLDivElement>();
+  /** 字典，存放列id和列组件 */
+  cells = new Map<keyof R, CellRenderer>();
+
+  shouldComponentUpdate(nextProps: RowRendererProps<R>) {
+    return rowComparer(nextProps, this.props);
+  }
+
+  handleDragEnter = (e: React.DragEvent<HTMLDivElement>) => {
+    // Prevent default to allow drop
+    e.preventDefault();
+    const { idx, cellMetaData } = this.props;
+    cellMetaData.onDragEnter(idx);
+  };
+
+  handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    // The default in Firefox is to treat data in dataTransfer as a URL and perform navigation on it, even if the data type used is 'text'
+    // To bypass this, we need to capture and prevent the drop event.
+    e.preventDefault();
+  };
+
+  /** 创建一个单元格组件，单元格组件可自定义 */
+  getCell(column: CalculatedColumn<R>) {
+    // 单元格具体组件由props传入，可灵活定制，默认值是Cell
+    const CellRendererComp = this.props.cellRenderer!;
+    const { idx, cellMetaData, isScrolling, row, isSelected, scrollLeft, lastFrozenColumnIndex } = this.props;
+    const { key } = column;
+
+    // 创建一个对象，包含要传递到Cell组件的所有props
+    const cellProps: CellRendererProps<R> & { ref: (cell: CellRenderer | null) => void } = {
+      ref: cell => (cell ? this.cells.set(key, cell) : this.cells.delete(key)),
+      idx: column.idx,
+      rowIdx: idx,
+      height: this.getRowHeight(),
+      column,
+      cellMetaData,
+      value: this.getCellValue(key || (String(column.idx) as keyof R)) as R[keyof R], // FIXME: fix types
+      rowData: row,
+      isRowSelected: isSelected,
+      expandableOptions: this.getExpandableOptions(key),
+      isScrolling,
+      scrollLeft,
+      lastFrozenColumnIndex,
+    };
+
+    return <CellRendererComp key={`${key as keyof R}-${idx}`} {...cellProps} />; // FIXME: fix key type
+  }
+
+  /** 创建一行中的所有单元格，返回单元格组件的数组 */
+  getCells() {
+    const { colOverscanStartIdx, colOverscanEndIdx, columns } = this.props;
+    const frozenColumns = columns.filter(c => isFrozen(c));
+    const nonFrozenColumn = columns.slice(colOverscanStartIdx, colOverscanEndIdx + 1).filter(c => !isFrozen(c));
+    return nonFrozenColumn.concat(frozenColumns).map(c => this.getCell(c));
+  }
+
+  getRowTop(): number {
+    const { current } = this.row;
+    return current ? current.offsetTop : 0;
+  }
+
+  getRowHeight(): number {
+    return this.props.height;
+  }
+
+  getCellValue(key: keyof R) {
+    const { isSelected, row } = this.props;
+    if (key === 'select-row') {
+      return isSelected;
+    }
+
+    return rowUtils.get(row, key);
+  }
+
+  getExpandableOptions(columnKey: keyof R) {
+    const { subRowDetails } = this.props;
+    // if (!subRowDetails) return;
+    if (!subRowDetails) return null;
+
+    const { field, expanded, children, treeDepth } = subRowDetails;
+    return {
+      canExpand: field === columnKey && ((children && children.length > 0) || subRowDetails.group === true),
+      field,
+      expanded,
+      children,
+      treeDepth,
+      subRowDetails,
+    };
+  }
+
+  setScrollLeft(scrollLeft: number) {
+    for (const column of this.props.columns) {
+      const { key } = column;
+      if (isFrozen(column) && this.cells.has(key)) {
+        this.cells.get(key)!.setScrollLeft(scrollLeft);
+      }
+    }
+  }
+
+  render() {
+    console.log('====props4 Row');
+    // console.log(this.props);
+    // console.log(this.state);
+
+    // 会应用到一行上的样式
+    const className = classNames(
+      'react-grid-Row',
+      `react-grid-Row--${this.props.idx % 2 === 0 ? 'even' : 'odd'}`,
+      { 'row-selected': this.props.isSelected },
+      this.props.extraClasses,
+      { 'rdg-scrolling': this.props.isScrolling },
+    );
+
+    return (
+      <div
+        ref={this.row}
+        className={className}
+        style={{ height: this.getRowHeight() }}
+        onDragEnter={this.handleDragEnter}
+        onDragOver={this.handleDragOver}
+        onDrop={this.handleDrop}
+      >
+        {this.getCells()}
+      </div>
+    );
+  }
+}

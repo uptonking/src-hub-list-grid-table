@@ -1,0 +1,7 @@
+
+docs/
+dist/
+
+LICENSE.txt
+*.md
+*.mdx
