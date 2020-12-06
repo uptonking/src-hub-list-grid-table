@@ -8,8 +8,8 @@ const render = (Component) => {
 
 render(App);
 
-if (module.hot) {
-  module.hot.accept('./App.tsx', () => {
+if ((module as any).hot) {
+  (module as any).hot.accept('./App.tsx', () => {
     render(App);
   });
 }

@@ -11,9 +11,9 @@ import 'react-data-grid/styles/rdg-main.css';
 //   count: number;
 // };
 
-export class RDGListSimpleApp extends React.Component {
+export class RDGSimpleListApp extends React.Component {
   render() {
-    console.log('==== RDGListSimpleApp, render() is called unexpectedly');
+    console.log('==== RDGSimpleListApp');
 
     // const rows = [
     //   { id: 0, title: 'row1', count: 200 },
@@ -86,7 +86,7 @@ const rows = [
   { id: 22, title: 'Task 3', complete: 60 },
 ];
 
-export class RDGListEditApp extends React.Component<any, any> {
+export class RDGSimpleEditApp extends React.Component<any, any> {
   // 表格初始数据，是行对象的数组
   state = { rows };
 
