@@ -12,7 +12,6 @@
     "test:log": "node index.js --name nested-a"
   },
   "dependencies": {
-    "@examples-hub/sample-react-components-ts": "1.0.0",
     "react": "^17.0.1",
     "react-dom": "^17.0.1"
   },

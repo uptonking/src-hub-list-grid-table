@@ -1,4 +1,4 @@
-import { _utils } from '../../react-data-grid';
+import { _utils } from 'react-data-grid';
 import groupBy from 'lodash/groupBy';
 
 const { getMixedTypeValueRetriever } = _utils;

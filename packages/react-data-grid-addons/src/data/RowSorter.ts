@@ -1,4 +1,4 @@
-import { _utils } from '../../react-data-grid';
+import { _utils } from 'react-data-grid';
 
 const { getMixedTypeValueRetriever } = _utils;
 

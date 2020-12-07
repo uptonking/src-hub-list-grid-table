@@ -1,4 +1,4 @@
 import React from 'react';
-import { ReactDataGrid } from '../../incubator/react-data-grid/index';
+import { ReactDataGrid } from 'react-data-grid';
 
 // export default Example;

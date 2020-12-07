@@ -1,4 +1,4 @@
-import { _utils } from '../../react-data-grid';
+import { _utils } from 'react-data-grid';
 import { createSelector } from './reselect';
 import filterRows from './RowFilterer';
 import sortRows from './RowSorter';

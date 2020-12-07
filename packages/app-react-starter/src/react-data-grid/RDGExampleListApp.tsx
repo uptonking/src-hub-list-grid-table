@@ -1,31 +1,14 @@
 import React from 'react';
-// import { CheckboxWithLabel } from '@examples-hub/sample-react-components-ts';
-import * as examples from '.';
+import * as examples from './grid';
 
-import './index.css';
+// import 'react-data-grid/rdg-bootstrap-3.3.7-custom.css';
+// import 'react-data-grid/rdg-main.css';
 
 const exampleNameArr = Object.keys(examples);
 
-console.log('==exampleNameArr, ', exampleNameArr);
-
-// export function App() {
-//   return (
-//     <div>
-//       <h1>本项目 react-monorepo-starter-ts</h1>
-//       <div>
-//         <input type='text' />
-//       </div>
-//       <div>
-//         {/* <CheckboxWithLabel labelOn='On' labelOff='Off' /> */}
-//         <RDGSimpleListApp />
-//       </div>
-//     </div>
-//   );
-// }
-
-export class App extends React.Component {
-  state = { currentExampleName: 'RDGSimpleListApp' };
-  // state = { currentExampleName: 'RDGSimpleEditApp' };
+export class RDGExampleListApp extends React.Component {
+  state = { currentExampleName: 'BasicCellEditSimple' };
+  // state = { currentExampleName: 'EgCustomFilter' };
 
   handleClick = (name) => {
     this.setState({
@@ -41,11 +24,11 @@ export class App extends React.Component {
     return (
       <div>
         <div>
-          <blockquote>list/grid Examples</blockquote>
+          <blockquote>ReactDataGrid Examples</blockquote>
         </div>
         <h2>{curName}</h2>
         <div
-          style={{ float: 'left', backgroundColor: 'beige', padding: '6px' }}
+          style={{ float: 'left', backgroundColor: 'snow', padding: '6px' }}
           className='left-toc-placeholder'
         >
           {exampleNameArr.map((name, index) => (
@@ -54,7 +37,7 @@ export class App extends React.Component {
             </div>
           ))}
         </div>
-        {/* width必须存在，height可不存在，且width不能是auto */}
+        {/* width必须存在，height可不存在 */}
         <div
           style={{ float: 'left', margin: '10px', width: '70%' }}
           className='right-comp-placeholder'
@@ -65,5 +48,3 @@ export class App extends React.Component {
     );
   }
 }
-
-export default App;

@@ -1,5 +1,5 @@
 import React from 'react';
-import { ReactDataGrid, CellNavigationMode } from '../../incubator/react-data-grid/index';
+import { ReactDataGrid, CellNavigationMode } from 'react-data-grid';
 class Example extends React.Component<any, any> {
   _columns: (
     | { key: string; name: string; frozen: boolean; width?: undefined }
@@ -51,7 +51,9 @@ class Example extends React.Component<any, any> {
   }
 
   getRandomDate = (start, end) => {
-    return new Date(start.getTime() + Math.random() * (end.getTime() - start.getTime())).toLocaleDateString();
+    return new Date(
+      start.getTime() + Math.random() * (end.getTime() - start.getTime()),
+    ).toLocaleDateString();
   };
 
   createRows = () => {
@@ -61,8 +63,12 @@ class Example extends React.Component<any, any> {
         id: i,
         task: `Task ${i}`,
         complete: Math.min(100, Math.round(Math.random() * 110)),
-        priority: ['Critical', 'High', 'Medium', 'Low'][Math.floor(Math.random() * 3 + 1)],
-        issueType: ['Bug', 'Improvement', 'Epic', 'Story'][Math.floor(Math.random() * 3 + 1)],
+        priority: ['Critical', 'High', 'Medium', 'Low'][
+          Math.floor(Math.random() * 3 + 1)
+        ],
+        issueType: ['Bug', 'Improvement', 'Epic', 'Story'][
+          Math.floor(Math.random() * 3 + 1)
+        ],
         startDate: this.getRandomDate(new Date(2015, 3, 1), new Date()),
         completeDate: this.getRandomDate(new Date(), new Date(2016, 0, 1)),
       });
@@ -71,7 +77,7 @@ class Example extends React.Component<any, any> {
     this._rows = rows;
   };
 
-  rowGetter = i => {
+  rowGetter = (i) => {
     return this._rows[i];
   };
 

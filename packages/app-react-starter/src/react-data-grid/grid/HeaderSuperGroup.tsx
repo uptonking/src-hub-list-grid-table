@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom';
-import { makeData } from '../util/mockDataUtil';
-import { ReactDataGrid, ColumnList } from '../../incubator/react-data-grid/index';
+import { makeData } from '../../util/mockDataUtil';
+import { ReactDataGrid } from 'react-data-grid';
 // import '../../incubator/react-data-grid/react-data-grid-header.css';
 
 export class HeaderSuperGroup extends React.Component {

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Column } from '../../react-data-grid';
+import { Column } from 'react-data-grid';
 
 /** 数字过滤规则，枚举 */
 enum RuleType {

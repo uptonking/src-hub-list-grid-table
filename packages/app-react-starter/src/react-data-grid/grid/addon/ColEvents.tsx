@@ -1,6 +1,6 @@
 import React from 'react';
-import { ReactDataGrid } from '../../../incubator/react-data-grid/index';
-import { Editors } from '../../../incubator/react-data-grid-addons/index';
+import { ReactDataGrid } from 'react-data-grid';
+import { Editors } from 'react-data-grid-addons';
 
 const { DropdownEditor } = Editors;
 const titles = ['Dr.', 'Mr.', 'Mrs.', 'Miss', 'Ms.'];

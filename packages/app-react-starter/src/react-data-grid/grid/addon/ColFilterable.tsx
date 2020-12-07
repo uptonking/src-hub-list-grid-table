@@ -1,6 +1,6 @@
 import React from 'react';
-import { ReactDataGrid } from '../../../incubator/react-data-grid/index';
-import { Toolbar, Data } from '../../../incubator/react-data-grid-addons/index';
+import { ReactDataGrid } from 'react-data-grid';
+import { Toolbar, Data } from 'react-data-grid-addons';
 
 const Selectors = Data.Selectors;
 

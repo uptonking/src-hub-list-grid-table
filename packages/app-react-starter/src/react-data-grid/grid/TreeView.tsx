@@ -1,5 +1,5 @@
 import React from 'react';
-import { ReactDataGrid } from '../../incubator/react-data-grid/index';
+import { ReactDataGrid } from 'react-data-grid';
 function createRows() {
   const rows = [];
   for (let i = 0; i < 100; i++) {

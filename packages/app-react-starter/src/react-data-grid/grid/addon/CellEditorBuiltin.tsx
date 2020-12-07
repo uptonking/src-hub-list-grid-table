@@ -1,6 +1,6 @@
 import React from 'react';
-import { ReactDataGrid } from '../../../incubator/react-data-grid/index';
-import { Editors, Formatters } from '../../../incubator/react-data-grid-addons/index';
+import { ReactDataGrid } from 'react-data-grid';
+import { Editors, Formatters } from 'react-data-grid-addons';
 
 const { DropdownEditor } = Editors;
 const { DropdownFormatter } = Formatters;
@@ -9,7 +9,12 @@ const { DropdownFormatter } = Formatters;
 // these can either be an array of strings, or an object that matches the schema below.
 const issueTypes = [
   { id: 'bug', value: 'bug', text: 'Bug', title: 'Bug' },
-  { id: 'improvement', value: 'improvement', text: 'Improvement', title: 'Improvement' },
+  {
+    id: 'improvement',
+    value: 'improvement',
+    text: 'Improvement',
+    title: 'Improvement',
+  },
   { id: 'epic', value: 'epic', text: 'Epic', title: 'Epic' },
   { id: 'story', value: 'story', text: 'Story', title: 'Story' },
 ];
@@ -42,20 +47,22 @@ class Example extends React.Component<any, any> {
     this.state = { rows: this.createRows(1000) };
   }
 
-  createRows = numberOfRows => {
+  createRows = (numberOfRows) => {
     const rows = [];
     for (let i = 1; i < numberOfRows; i++) {
       rows.push({
         id: i,
         task: `Task ${i}`,
-        issueType: ['Bug', 'Improvement', 'Epic', 'Story'][Math.floor(Math.random() * 3 + 1)],
+        issueType: ['Bug', 'Improvement', 'Epic', 'Story'][
+          Math.floor(Math.random() * 3 + 1)
+        ],
       });
     }
 
     return rows;
   };
 
-  rowGetter = i => {
+  rowGetter = (i) => {
     return this.state.rows[i];
   };
 

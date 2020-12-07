@@ -7,7 +7,7 @@
     "sourceMap": true,
     "module": "esnext",
     "moduleResolution": "node",
-    "jsx": "react",
+    "jsx": "preserve",
     "allowJs": false,
     "checkJs": false,
     "lib": ["dom", "es2015", "es2016", "es2017", "esnext"],
