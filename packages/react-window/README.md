@@ -1,0 +1,56 @@
+# react-window
+
+- overview
+  - React components for efficiently rendering large lists and tabular data
+  - https://github.com/bvaughn/react-window
+  - https://react-window.now.sh/#/examples/list/fixed-size
+  - https://react-window-next.now.sh/#/examples/list/dynamic-size
+- features
+  - small and fast
+  - addons
+    - react-vtree: built on top of react-window
+- drawbacks
+  - 功能简洁，但过少
+  - 使用键盘滚动只能滚动一次，后续失效
+  - 不支持渲染 tr,td 的方式实现列表，若要兼容以前 td 的表格和样式，需要自己实现，可参考 window-table
+    - 若支持渲染成 tr 和 td，则可直接使用 bootstrap 的表格样式名
+    - 社区开发者实现了列表内容渲染成 tr-td
+- dependencies
+  - memoize-one
+  - react
+- docs
+  - 列表内容显示基于 div
+  - `<FixedSizeList>`: 可以创建等高或等宽的行式、列式列表
+    - responsible for rendering the individual item specified by an index prop
+    - This component also receives a style prop (used for positioning)
+    - To render more complex items, try to extend PureComponent to avoid unnecessary re-renders
+  - `<VariableSizeList>`: 可变宽高的列表，各列宽高可不相等
+    - caches offsets and measurements for each index for performance purposes
+    - estimatedItemSize is used to calculate the estimated total size of a list before its items have all been measured. It is updated whenever new items are measured.
+  - `<FixedSizeGrid>`: 等宽或等高的网格
+    - responsible for rendering the individual item specified by indices
+    - This component receives a style prop (used for positioning)
+  - `<VariableSizeGrid>`: 可变宽高的网格
+  - useIsScrolling：在滚动时显示占位符，若表格内容较复杂，滚动时显示占位符可提升性能
+  - listRef.current.scrollToItem(index)：滚动到指定行/列
+- faq
+  - If list items are expensive to render(若表格各项内容较复杂)
+    - React.memo or shouldComponentUpdate to avoid unnecessary re-renders
+    - memoize()(from memoize-one) memoizes incoming props, to avoid causing unnecessary re-renders pure Row components
+  - react-window vs react-virtualized
+    - react-window is a complete rewrite of react-virtualized
+    - not try to solve as many problems or support as many use cases. Instead I focused on making the package smaller and faster
+  - Why is my list blank when I scroll?
+    - you probably forgot to use the style parameter!
+    - Libraries like react-window work by **absolutely positioning the list items** (via an **inline style**), so don't forget to attach it to the DOM element you render!
+  - Can I attach custom properties or event handlers?
+    - using the outerElementType prop
+  - Can I add padding to the top and bottom of a list? add gutter or padding between items?
+    - using inline style
+  - Can I lazy load data for my list?
+    - recommend using the react-window-infinite-loader package
+  - Can a list or a grid fill 100% the width or height of a page?
+    - recommend using the react-virtualized-auto-sizer package
+- changelog
+  - 1.6.0-20190305-RTL support added for lists and grids
+  - 1.2.0-20181004-Flow types added to NPM package
